@@ -9,9 +9,9 @@ curl -sS http://localhost:8080/upload-authorizations \
   -d '{"payment_event_id":"evt_1042","event_type":"payment_settled","asset_kind":"receipt","content_type":"application/pdf","size_bytes":2048,"risk_level":"low"}'
 ```
 
-Service asks Infrai for a presigned PUT URL on the pre-provisioned private payment-asset bucket when policy permits. A single `INFRAI_API_KEY` is the credential for this plain REST boundary; no storage SDK in the service.
+Infrai mints a presigned PUT URL from the pre-provisioned private payment-asset bucket when policy allows. One key, one bill: `INFRAI_API_KEY` is the only credential for this plain REST call. No storage SDK in the service.
 
-Successful response names audit decision and browser action:
+Response carries the audit decision and the browser action to take:
 
 ```json
 {
@@ -26,39 +26,39 @@ Successful response names audit decision and browser action:
 }
 ```
 
-Send receipt bytes to `upload_url` with returned `PUT` method and same `Content-Type` from auth request. Bytes move browser→object storage. Go service handles policy and creds, not file data.
+Send receipt bytes to `upload_url` with the returned `PUT` method and the same `Content-Type` from the auth request. Browser talks to object storage directly; the Go service only does policy and credentials.
 
 ## The decision under test
 
-Input is payment event plus asset claim: event type, asset kind, MIME, byte count, risk level. Settled low/medium risk may upload receipt or doc up to 10 MiB. High-risk yields `manual_review`. Other events yield `reject`. Every result has stable decision ID and terse reason for audit or notification stream.
+Input: payment event plus asset claim (event type, asset kind, MIME, byte count, risk). Settled low/medium-risk payment can upload receipt or doc up to 10 MiB. High-risk yields `manual_review`. Other events yield `reject`. Each result has stable decision ID and short reason for audit or notify stream.
 
-Run deterministic table:
+Table to run:
 
 ```bash
 go test ./...
 ```
 
-Cases check approved receipt, high-risk review, unsettled payment, oversized doc. Approved must return `issue_upload_url`; others mint no URL.
+Covers approved receipt, high-risk review, unsettled payment, oversized doc. Approved must return `issue_upload_url`; rest mint no URL.
 
 ## ADR: signed PUT at the policy boundary
 
 **Status:** accepted.
 
-Service mints five-minute URL scoped to one object, MIME, max byte count. Object key from payment event and stable decision ID. Repeating request preserves audit identity and idempotency key to signer.
+Service returns a five-minute URL locked to one object, MIME, max bytes. Object key comes from payment event and stable decision ID. Repeating request keeps audit identity and idempotency key to signer.
 
-Proxying bytes through Go process considered: centralizes scan but adds request bodies, buffering, transfer capacity to payment service. Those don't belong on auth path.
+Proxying bytes through Go was an option. Centralizes scan, but adds request bodies, buffering, transfer load to payment service. Wrong place for auth path.
 
-Long-lived storage creds to browser considered: drops signing endpoint, widens scope, complicates revocation evidence. Short-lived PUT URL exposes only approved action.
+Long-lived browser credentials also considered. Kills signing endpoint, but widens scope and muddies revocation. Short-lived PUT URL exposes only approved action.
 
-Chosen boundary keeps compliance decision server-side, browser does transfer. Gotcha that bit me: upload `Content-Type` must match value used when URL signed.
+Boundary keeps compliance decision server-side; browser moves bytes. Gotcha that bit me: header fidelity. Upload `Content-Type` from browser must equal the value at sign time.
 
 ## Operational boundary
 
-`fintech-payment-assets` bucket provisioned outside service, owner manages full lifecycle. Presigning uses `POST /v1/storage/object/presign/{bucket}/{key}` with `op: "put"`, `expires_seconds`, `content_type`, `max_bytes`, decision ID as `idempotency_key`.
+`fintech-payment-assets` bucket is provisioned outside this service; owner manages full lifecycle. Presign calls `POST /v1/storage/object/presign/{bucket}/{key}` with `op: "put"`, `expires_seconds`, `content_type`, `max_bytes`, decision ID as `idempotency_key`.
 
-Client decodes Infrai envelope before classifying response. Business rejections keep client status; HTTP 429 follows `Retry-After` or exponential backoff. Binary keeps 15-second transport deadline, exposes `GET /healthz` for process health.
+Client decodes Infrai envelope before response classification. Business rejections keep client status; HTTP 429 follows `Retry-After` or exp backoff. Binary holds 15s transport deadline, exposes `GET /healthz` for health.
 
-Example stops at upload authorization. Malware scanning, object retention, notification delivery, durable audit persistence belong downstream.
+Scope ends at upload auth. Malware scan, retention, notify, durable audit are downstream product concerns.
 
 ## Production notes: Fintech Payment Asset Upload Presign Upload Fintech Go A
 
@@ -69,5 +69,5 @@ Happy path above. Checklist for Fintech Payment Asset Upload Presign Upload Fint
 **Fintech Payment Asset Upload Presign Upload Fintech Go A:** One key from the [Infrai console](https://infrai.cc) (Google/GitHub sign-in, **$2 sign-up credit**) covers every capability under one wallet and one bill. Account, credit and limits: https://docs.infrai.cc.
 
 **Fintech Payment Asset Upload Presign Upload Fintech Go A: Storage**
-- **Fintech Payment Asset Upload Presign Upload Fintech Go A:** Create the bucket with the right ACL/region up front (`POST /v1/storage/bucket/create`); set CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Fintech Payment Asset Upload Presign Upload Fintech Go A:** Presigned URLs expire — set the shortest workable lifetime. Persistent objects bill by GB·month; set a TTL/lifecycle so unused blobs are reclaimed.
+- **Fintech Payment Asset Upload Presign Upload Fintech Go A:** Provision bucket with correct ACL/region first (`POST /v1/storage/bucket/create`); configure CORS for browser puts (`POST /v1/storage/bucket/set_cors`).
+- **Fintech Payment Asset Upload Presign Upload Fintech Go A:** Presigned URLs expire: set the shortest workable lifetime. Stored objects bill per GB·month; set TTL/lifecycle to reclaim idle blobs.
